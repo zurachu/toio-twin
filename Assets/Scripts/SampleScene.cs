@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
 using toio;
 using UnityEngine;
 using UnityEngine.UI;
@@ -48,10 +50,11 @@ public class SampleScene : MonoBehaviour
             case 1:
                 if (cubeManager.synced)
                 {
-                    var mv0 = cubeManager.navigators[0].Navi2Target(250, 90, maxSpd: 50).Exec();
-                    var mv1 = cubeManager.navigators[1].Navi2Target(250, 410, maxSpd: 50).Exec();
+                    var mv0 = cubeManager.navigators[0].Navi2Target(250, 100, maxSpd: 50).Exec();
+                    var mv1 = cubeManager.navigators[1].Navi2Target(250, 400, maxSpd: 50).Exec();
                     if (mv0.reached && mv1.reached)
                     {
+                        StartGame(cubeManager.cubes);
                         phase++;
                     }
                 }
@@ -60,20 +63,28 @@ public class SampleScene : MonoBehaviour
         }
     }
 
+    private async void StartGame(List<Cube> cubes)
+    {
+        await UniTask.WhenAll(
+            ToioMotorUtility.TargetMove(cubes[0], 250, 100, 0),
+            ToioMotorUtility.TargetMove(cubes[1], 250, 400, 180));
+        phase++;
+        cubes[0].Move(115, 101, 0);
+        cubes[1].Move(115, 101, 0);
+    }
+
     public async void OnClickConnect()
     {
         connectButton.interactable = false;
 
         var cubeManager = ToioCubeManagerService.Instance.CubeManager;
         var cube = await cubeManager.SingleConnect();
-        if (cube == null)
+        if (cube != null)
         {
-            return;
+            var index = cubeManager.cubes.Count - 1;
+            cube.idMissedCallback.AddListener("toio-twin", (_cube) => { OnPositionIdMissed(_cube, index); });
+            ToioLedUtility.TurnLedOn(cube, colors[index], 0);
         }
-
-        var index = cubeManager.cubes.Count - 1;
-        cube.idMissedCallback.AddListener("toio-twin", (_cube) => { OnPositionIdMissed(_cube, index); });
-        ToioLedUtility.TurnLedOn(cube, colors[index], 0);
 
         UpdateConnectButton();
         connectButton.interactable = true;
@@ -83,15 +94,17 @@ public class SampleScene : MonoBehaviour
     {
         caughtTimes[index] = DateTime.Now;
 
+        cube.Move(0, 0, 0, Cube.ORDER_TYPE.Strong);
+
         var cubeManager = ToioCubeManagerService.Instance.CubeManager;
-        if (cubeManager.cubes.TrueForAll(_cube => !_cube.isGrounded))
+        if (/*phase == 3 &&*/ cubeManager.cubes.TrueForAll(_cube => !_cube.isGrounded))
         {
             var timeSpan = caughtTimes[0] - caughtTimes[1];
             UIUtility.TrySetText(timeSpanText, $"{timeSpan}");
 
             if (Mathf.Abs((float)timeSpan.TotalSeconds) < 0.1f)
             {
-                cubeManager.cubes[0].PlayPresetSound(ToioSoundUtility.PresetSoundId.Get1);
+                cubeManager.cubes.ForEach(_cube => _cube.PlayPresetSound(ToioSoundUtility.PresetSoundId.Get1, order: Cube.ORDER_TYPE.Weak));
             }
         }
 
