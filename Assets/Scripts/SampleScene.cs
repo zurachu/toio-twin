@@ -13,8 +13,8 @@ public class SampleScene : MonoBehaviour
 
     private static readonly Color[] colors = new Color[]
     {
-        Color.red,
-        Color.blue,
+        Color.magenta,
+        Color.cyan,
     };
 
     private int phase;
