@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 using toio;
 using UnityEngine;
@@ -19,58 +19,21 @@ public class SampleScene : MonoBehaviour
         Color.cyan,
     };
 
-    private int phase;
     private DateTime[] caughtTimes = new DateTime[2];
+    private CancellationTokenSource cancellationTokenSource;
 
-    // Start is called before the first frame update
-    void Start()
+    private void Start()
     {
         UpdateConnectButton();
     }
 
-    // Update is called once per frame
-    void Update()
+    private void OnDestroy()
     {
-        if (RemainingRequiredCubeCount > 0)
+        if (cancellationTokenSource != null)
         {
-            return;
+            cancellationTokenSource.Cancel();
+            cancellationTokenSource.Dispose();
         }
-
-        var cubeManager = ToioCubeManagerService.Instance.CubeManager;
-
-        switch (phase)
-        {
-            case 0:
-                if (cubeManager.cubes.TrueForAll(_cube => _cube.isGrounded))
-                {
-                    phase++;
-                }
-
-                break;
-            case 1:
-                if (cubeManager.synced)
-                {
-                    var mv0 = cubeManager.navigators[0].Navi2Target(250, 100, maxSpd: 50).Exec();
-                    var mv1 = cubeManager.navigators[1].Navi2Target(250, 400, maxSpd: 50).Exec();
-                    if (mv0.reached && mv1.reached)
-                    {
-                        StartGame(cubeManager.cubes);
-                        phase++;
-                    }
-                }
-
-                break;
-        }
-    }
-
-    private async void StartGame(List<Cube> cubes)
-    {
-        await UniTask.WhenAll(
-            ToioMotorUtility.TargetMove(cubes[0], 250, 100, 0),
-            ToioMotorUtility.TargetMove(cubes[1], 250, 400, 180));
-        phase++;
-        cubes[0].Move(115, 101, 0);
-        cubes[1].Move(115, 101, 0);
     }
 
     public async void OnClickConnect()
@@ -84,10 +47,21 @@ public class SampleScene : MonoBehaviour
             var index = cubeManager.cubes.Count - 1;
             cube.idMissedCallback.AddListener("toio-twin", (_cube) => { OnPositionIdMissed(_cube, index); });
             ToioLedUtility.TurnLedOn(cube, colors[index], 0);
+
+            if (RemainingRequiredCubeCount <= 0)
+            {
+                StartGame(cubeManager);
+            }
         }
 
         UpdateConnectButton();
         connectButton.interactable = true;
+    }
+
+    private void UpdateConnectButton()
+    {
+        UIUtility.TrySetActive(connectButton, RemainingRequiredCubeCount > 0);
+        UIUtility.TrySetText(connectButtonText, $"キューブに接続する（残り{RemainingRequiredCubeCount}台）");
     }
 
     private void OnPositionIdMissed(Cube cube, int index)
@@ -97,7 +71,7 @@ public class SampleScene : MonoBehaviour
         cube.Move(0, 0, 0, Cube.ORDER_TYPE.Strong);
 
         var cubeManager = ToioCubeManagerService.Instance.CubeManager;
-        if (/*phase == 3 &&*/ cubeManager.cubes.TrueForAll(_cube => !_cube.isGrounded))
+        if (cubeManager.cubes.TrueForAll(_cube => !_cube.isGrounded))
         {
             var timeSpan = caughtTimes[0] - caughtTimes[1];
             UIUtility.TrySetText(timeSpanText, $"{timeSpan}");
@@ -108,12 +82,43 @@ public class SampleScene : MonoBehaviour
             }
         }
 
-        phase = 0;
+        StartGame(cubeManager);
     }
 
-    private void UpdateConnectButton()
+    private void StartGame(CubeManager cubeManager)
     {
-        UIUtility.TrySetActive(connectButton, RemainingRequiredCubeCount > 0);
-        UIUtility.TrySetText(connectButtonText, $"キューブに接続する（残り{RemainingRequiredCubeCount}台）");
+        if (cancellationTokenSource != null)
+        {
+            cancellationTokenSource.Cancel();
+        }
+
+        cancellationTokenSource = new CancellationTokenSource();
+        StartGame(cubeManager, cancellationTokenSource.Token);
+    }
+
+    private async void StartGame(CubeManager cubeManager, CancellationToken cancellationToken)
+    {
+        var cubes = cubeManager.cubes;
+        await UniTask.WaitUntil(() => cubes.TrueForAll(_cube => _cube.isGrounded), cancellationToken: cancellationToken);
+        await UniTask.WaitUntil(() => GoToStart(cubeManager), cancellationToken: cancellationToken);
+        await UniTask.WhenAll(
+            ToioMotorUtility.TargetMove(cubes[0], 250, 100, 0),
+            ToioMotorUtility.TargetMove(cubes[1], 250, 400, 180));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        cubes[0].Move(115, 101, 0);
+        cubes[1].Move(115, 101, 0);
+    }
+
+    private bool GoToStart(CubeManager cubeManager)
+    {
+        if (!cubeManager.synced)
+        {
+            return false;
+        }
+
+        var mv0 = cubeManager.navigators[0].Navi2Target(250, 100, maxSpd: 50).Exec();
+        var mv1 = cubeManager.navigators[1].Navi2Target(250, 400, maxSpd: 50).Exec();
+        return mv0.reached && mv1.reached;
     }
 }
